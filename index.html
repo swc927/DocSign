@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
+  <title>DocSign SWC</title>
+  <link rel="stylesheet" href="styles.css"/>
+  <!-- External libs -->
+  <script defer src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
+  <script defer src="https://docs.opencv.org/4.x/opencv.js"></script>
+</head>
+<body>
+  <div class="app">
+    <header class="topbar">
+      <h1><span class="brand">DocSign</span> <span class="by">SWC</span></h1>
+      <div class="actions">
+        <button id="btnStartCamera" class="btn primary">Start camera</button>
+        <label class="filelabel">
+          <input type="file" id="fileInput" accept="image/*" />
+          <span class="btn">Upload image</span>
+        </label>
+      </div>
+    </header>
+
+    <main class="content">
+      <section class="stage">
+        <video id="video" playsinline autoplay muted></video>
+        <canvas id="captureCanvas"></canvas>
+        <canvas id="workCanvas"></canvas>
+        <canvas id="signatureCanvas"></canvas>
+
+        <div id="hint" class="hint">
+          Align a document in the frame then tap Capture
+        </div>
+      </section>
+
+      <section class="controls">
+        <div class="row">
+          <button id="btnCapture" class="btn success">Capture</button>
+          <button id="btnRetake" class="btn">Retake</button>
+          <button id="btnAutoFix" class="btn">Auto straighten</button>
+          <button id="btnBW" class="btn">Black and white</button>
+          <button id="btnColor" class="btn">Original colour</button>
+        </div>
+
+        <div class="row">
+          <div class="signature-tools">
+            <span>Signature</span>
+            <button id="penBlack" class="btn tiny active">Black pen</button>
+            <button id="penBlue" class="btn tiny">Blue pen</button>
+            <button id="btnClearSig" class="btn tiny">Clear</button>
+          </div>
+          <div class="zoom-tools">
+            <span>Zoom</span>
+            <button id="zoomIn" class="btn tiny">+</button>
+            <button id="zoomOut" class="btn tiny">−</button>
+            <button id="zoomReset" class="btn tiny">Reset</button>
+          </div>
+        </div>
+
+        <div class="row end">
+          <button id="btnDownload" class="btn primary">Download PDF</button>
+          <button id="btnShare" class="btn whatsapp">Share in WhatsApp</button>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>All on your device. No upload to servers.</p>
+    </footer>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
