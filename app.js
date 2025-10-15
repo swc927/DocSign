@@ -271,6 +271,12 @@ shareBtn.addEventListener("click", async () => {
       a.href = url;
       a.download = "DocSign_by_SWC.png";
       a.click();
+      const img = new Image();
+      img.src = url;
+      img.style.width = "100%";
+      img.style.marginTop = "1rem";
+      document.body.appendChild(img);
+      alert("Tap and hold the image to save it to your camera roll.");
     }
   } catch (err) {
     alert("Share failed. " + err.message);
