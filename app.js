@@ -1,453 +1,281 @@
+// DocSign by SWC
+// All logic is client side to protect user privacy
 
-// DocSign SWC
-// All logic runs on the device. Uses OpenCV.js for detection and jsPDF for export.
+const fileInput = document.getElementById("fileInput");
+const docCanvas = document.getElementById("docCanvas");
+const sigCanvas = document.getElementById("sigCanvas");
+const ph = document.getElementById("placeholder");
 
-const video = document.getElementById('video');
-const captureCanvas = document.getElementById('captureCanvas');
-const workCanvas = document.getElementById('workCanvas');
-const sigCanvas = document.getElementById('signatureCanvas');
-const hint = document.getElementById('hint');
+const modeRadios = document.querySelectorAll('input[name="mode"]');
+const thresholdSlider = document.getElementById("thresholdSlider");
+const bright = document.getElementById("brightness");
+const contr = document.getElementById("contrast");
+const penSize = document.getElementById("penSize");
+const inkBtns = document.querySelectorAll(".ink");
+const clearBtn = document.getElementById("clearSig");
+const downloadBtn = document.getElementById("downloadBtn");
+const shareBtn = document.getElementById("shareBtn");
 
-const btnStartCamera = document.getElementById('btnStartCamera');
-const btnCapture = document.getElementById('btnCapture');
-const btnRetake = document.getElementById('btnRetake');
-const btnAutoFix = document.getElementById('btnAutoFix');
-const btnBW = document.getElementById('btnBW');
-const btnColor = document.getElementById('btnColor');
-const btnDownload = document.getElementById('btnDownload');
-const btnShare = document.getElementById('btnShare');
-const fileInput = document.getElementById('fileInput');
-const penBlack = document.getElementById('penBlack');
-const penBlue = document.getElementById('penBlue');
-const btnClearSig = document.getElementById('btnClearSig');
-const zoomIn = document.getElementById('zoomIn');
-const zoomOut = document.getElementById('zoomOut');
-const zoomReset = document.getElementById('zoomReset');
+const dctx = docCanvas.getContext("2d");
+const sctx = sigCanvas.getContext("2d");
 
-let stream = null;
-let transformState = { scale: 1, x: 0, y: 0 };
-let penColour = 'black';
-let drawing = false;
-let lastPt = null;
-let imageIsBW = false;
-let haveImage = false;
+let img = new Image();
+let originalImageBitmap = null;
+let currentInk = "black";
 
-function setCanvasSizesFromStage(){
-  const rect = workCanvas.getBoundingClientRect();
-  [captureCanvas, workCanvas, sigCanvas].forEach(cv=>{
-    cv.width = Math.floor(rect.width * devicePixelRatio);
-    cv.height = Math.floor(rect.height * devicePixelRatio);
-    cv.style.width = '100%';
-    cv.style.height = '100%';
-  });
-}
-
-function drawCurrentFrameToCapture(){
-  const ctx = captureCanvas.getContext('2d');
-  ctx.save();
-  ctx.scale(devicePixelRatio, devicePixelRatio);
-  ctx.drawImage(video, 0, 0, captureCanvas.width/devicePixelRatio, captureCanvas.height/devicePixelRatio);
-  ctx.restore();
-}
-
-async function startCamera(){
-  if(stream){ return }
-  try{
-    stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment' },
-      audio: false
-    });
-    video.srcObject = stream;
-    video.play();
-    hint.style.display = 'block';
-  }catch(err){
-    alert('Camera could not start. You can upload an image instead.');
+function fitCanvasToWrap() {
+  const wrap = document.querySelector(".canvas-wrap");
+  const rect = wrap.getBoundingClientRect();
+  const ratio = 3 / 4;
+  let w = rect.width;
+  let h = (w * 4) / 3;
+  if (h > rect.height) {
+    h = rect.height;
+    w = (h * 3) / 4;
   }
+  docCanvas.width = w;
+  docCanvas.height = h;
+  sigCanvas.width = w;
+  sigCanvas.height = h;
 }
-
-function stopCamera(){
-  if(stream){
-    stream.getTracks().forEach(t=>t.stop());
-  }
-  stream = null;
-}
-
-function toMatFromCanvas(canvas){
-  const src = cv.imread(canvas);
-  return src;
-}
-
-function resizeToDocAspect(mat){
-  // ensure a standard A4 portrait aspect for better warp
-  const aspect = 1.4142; // sqrt(2) A series
-  let h = mat.rows;
-  let w = Math.round(h / aspect);
-  if(w > mat.cols){
-    w = mat.cols;
-    h = Math.round(w * aspect);
-  }
-  const rect = new cv.Rect(Math.floor((mat.cols - w)/2), Math.floor((mat.rows - h)/2), w, h);
-  return mat.roi(rect);
-}
-
-function autoDetectQuad(mat){
-  // returns four points ordered TL TR BR BL, fallback to image corners
-  let gray = new cv.Mat();
-  let blur = new cv.Mat();
-  let edges = new cv.Mat();
-  cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
-  cv.GaussianBlur(gray, blur, new cv.Size(5,5), 0);
-  cv.Canny(blur, edges, 60, 160);
-  let contours = new cv.MatVector();
-  let hierarchy = new cv.Mat();
-  cv.findContours(edges, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
-  let biggestArea = 0;
-  let bestQuad = null;
-
-  for(let i=0; i<contours.size(); i++){
-    let cnt = contours.get(i);
-    let peri = cv.arcLength(cnt, true);
-    let approx = new cv.Mat();
-    cv.approxPolyDP(cnt, approx, 0.02 * peri, true);
-    if(approx.rows === 4 && cv.contourArea(approx) > biggestArea){
-      biggestArea = cv.contourArea(approx);
-      bestQuad = approx.clone();
-    }
-    approx.delete();
-    cnt.delete();
-  }
-
-  let pts;
-  if(bestQuad){
-    pts = [];
-    for(let i=0; i<4; i++){
-      pts.push({x: bestQuad.intPtr(i,0)[0], y: bestQuad.intPtr(i,0)[1]});
-    }
-    bestQuad.delete();
-    // order TL TR BR BL
-    pts.sort((a,b)=>a.y-b.y);
-    const top = pts.slice(0,2).sort((a,b)=>a.x-b.x);
-    const bottom = pts.slice(2).sort((a,b)=>a.x-b.x);
-    pts = [top[0], top[1], bottom[1], bottom[0]];
-  }else{
-    pts = [
-      {x:0, y:0},
-      {x:mat.cols-1, y:0},
-      {x:mat.cols-1, y:mat.rows-1},
-      {x:0, y:mat.rows-1}
-    ];
-  }
-
-  gray.delete(); blur.delete(); edges.delete(); contours.delete(); hierarchy.delete();
-  return pts;
-}
-
-function warpToRect(mat, quad){
-  const width = mat.cols;
-  const height = mat.rows;
-  const srcTri = cv.matFromArray(4,1,cv.CV_32FC2, [
-    quad[0].x, quad[0].y,
-    quad[1].x, quad[1].y,
-    quad[2].x, quad[2].y,
-    quad[3].x, quad[3].y
-  ]);
-  const dstTri = cv.matFromArray(4,1,cv.CV_32FC2, [
-    0,0,
-    width-1,0,
-    width-1,height-1,
-    0,height-1
-  ]);
-  const M = cv.getPerspectiveTransform(srcTri, dstTri);
-  let dst = new cv.Mat();
-  cv.warpPerspective(mat, dst, M, new cv.Size(width, height), cv.INTER_LINEAR, cv.BORDER_REPLICATE);
-  srcTri.delete(); dstTri.delete(); M.delete();
-  return dst;
-}
-
-function drawMatOnCanvas(mat, canvas){
-  cv.imshow(canvas, mat);
-}
-
-function runAutoFix(){
-  const src = toMatFromCanvas(captureCanvas);
-  const cropped = resizeToDocAspect(src);
-  const quad = autoDetectQuad(cropped);
-  const warped = warpToRect(cropped, quad);
-  drawMatOnCanvas(warped, workCanvas);
-  haveImage = true;
-  imageIsBW = false;
-  src.delete(); cropped.delete(); warped.delete();
-}
-
-function applyBW(){
-  const src = toMatFromCanvas(workCanvas);
-  let gray = new cv.Mat();
-  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY);
-  let result = new cv.Mat();
-  cv.adaptiveThreshold(gray, result, 255, cv.ADAPTIVE_THRESH_GAUSSIAN_C, cv.THRESH_BINARY, 35, 10);
-  cv.cvtColor(result, src, cv.COLOR_GRAY2RGBA);
-  drawMatOnCanvas(src, workCanvas);
-  src.delete(); gray.delete(); result.delete();
-  imageIsBW = true;
-}
-
-function restoreColour(){
-  // simply redraw from capture then refix to keep geometry identical
-  runAutoFix();
-  imageIsBW = false;
-}
-
-function onResize(){
-  setCanvasSizesFromStage();
-  if(haveImage){
-    // redraw existing work canvas by scaling its bitmap to new size
-    // save old to temp
-    const tmp = document.createElement('canvas');
-    tmp.width = workCanvas.width; tmp.height = workCanvas.height;
-    tmp.getContext('2d').drawImage(workCanvas,0,0);
-    const ctx = workCanvas.getContext('2d');
-    ctx.clearRect(0,0,workCanvas.width,workCanvas.height);
-    ctx.drawImage(tmp,0,0,workCanvas.width,workCanvas.height);
-  }
-}
-
-function handleCapture(){
-  if(!stream){ return }
-  drawCurrentFrameToCapture();
-  runAutoFix();
-  hint.style.display = 'none';
-}
-
-function handleRetake(){
-  haveImage = false;
-  imageIsBW = false;
-  const c1 = workCanvas.getContext('2d');
-  const c2 = captureCanvas.getContext('2d');
-  [c1,c2].forEach(c=>c.clearRect(0,0,workCanvas.width,workCanvas.height));
-  clearSignature();
-  hint.style.display = 'block';
-}
-
-function clearSignature(){
-  const sctx = sigCanvas.getContext('2d');
-  sctx.clearRect(0,0,sigCanvas.width,sigCanvas.height);
-}
-
-function penColourFromButton(){
-  penBlack.classList.toggle('active', penColour==='black');
-  penBlue.classList.toggle('active', penColour==='blue');
-}
-
-function pressureFromSpeed(prev, curr){
-  // vary line width based on speed
-  if(!prev) return 1.6;
-  const dx = curr.x - prev.x;
-  const dy = curr.y - prev.y;
-  const dist = Math.sqrt(dx*dx + dy*dy);
-  const p = Math.max(0.8, Math.min(2.2, 2.2 - dist*0.04));
-  return p;
-}
-
-function drawSigPoint(pt){
-  const ctx = sigCanvas.getContext('2d');
-  ctx.lineCap = 'round';
-  ctx.lineJoin = 'round';
-  const stroke = penColour === 'blue' ? 'rgba(20,80,200,1)' : 'rgba(20,20,20,1)';
-  ctx.strokeStyle = stroke;
-  ctx.shadowColor = stroke;
-  ctx.shadowBlur = 1.5;
-  const w = 2.2 * pressureFromSpeed(lastPt, pt);
-  ctx.lineWidth = w * devicePixelRatio;
-  ctx.beginPath();
-  if(lastPt){
-    ctx.moveTo(lastPt.x * devicePixelRatio, lastPt.y * devicePixelRatio);
-    ctx.lineTo(pt.x * devicePixelRatio, pt.y * devicePixelRatio);
-    ctx.stroke();
-  }else{
-    ctx.moveTo(pt.x * devicePixelRatio, pt.y * devicePixelRatio);
-    ctx.lineTo(pt.x * devicePixelRatio + 0.2, pt.y * devicePixelRatio + 0.2);
-    ctx.stroke();
-  }
-  lastPt = pt;
-}
-
-function pointerPos(e){
-  const rect = sigCanvas.getBoundingClientRect();
-  const x = (e.clientX - rect.left);
-  const y = (e.clientY - rect.top);
-  return {x, y};
-}
-
-function setupSignature(){
-  sigCanvas.addEventListener('pointerdown', e=>{
-    if(!haveImage) return;
-    drawing = true; lastPt = null; sigCanvas.setPointerCapture(e.pointerId);
-    drawSigPoint(pointerPos(e));
-  });
-  sigCanvas.addEventListener('pointermove', e=>{
-    if(!drawing) return;
-    drawSigPoint(pointerPos(e));
-  });
-  window.addEventListener('pointerup', e=>{
-    if(drawing){ drawing = false; lastPt = null; }
-  });
-}
-
-function setupZoomPan(){
-  let isDragging = false;
-  let last = null;
-  workCanvas.style.transformOrigin = '0 0';
-  sigCanvas.style.transformOrigin = '0 0';
-
-  function apply(){
-    const t = `translate(${transformState.x}px, ${transformState.y}px) scale(${transformState.scale})`;
-    workCanvas.style.transform = t;
-    sigCanvas.style.transform = t;
-  }
-
-  sigCanvas.addEventListener('pointerdown', e=>{
-    if(e.pointerType === 'touch' || e.pointerType === 'pen'){
-      isDragging = true; last = {x: e.clientX, y: e.clientY};
-      sigCanvas.setPointerCapture(e.pointerId);
-    }
-  });
-  sigCanvas.addEventListener('pointermove', e=>{
-    if(isDragging){
-      const dx = e.clientX - last.x;
-      const dy = e.clientY - last.y;
-      transformState.x += dx;
-      transformState.y += dy;
-      last = {x: e.clientX, y: e.clientY};
-      apply();
-    }
-  });
-  window.addEventListener('pointerup', e=>{ isDragging=false });
-
-  zoomIn.addEventListener('click', ()=>{ transformState.scale = Math.min(4, transformState.scale*1.15); apply(); });
-  zoomOut.addEventListener('click', ()=>{ transformState.scale = Math.max(0.5, transformState.scale/1.15); apply(); });
-  zoomReset.addEventListener('click', ()=>{ transformState.scale=1; transformState.x=0; transformState.y=0; apply(); });
-}
-
-async function downloadPDF(){
-  if(!haveImage){ alert('Capture or upload first'); return }
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ orientation:'portrait', unit:'pt', format:'a4' });
-  // merge work and signature to a temporary canvas at natural size
-  const tmp = document.createElement('canvas');
-  tmp.width = workCanvas.width; tmp.height = workCanvas.height;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(workCanvas,0,0);
-  // reverse transforms for signature because we only transform CSS
-  // draw signature at native scale by reading its bitmap
-  tctx.drawImage(sigCanvas,0,0);
-
-  // fit into A4 while keeping aspect
-  const imgData = tmp.toDataURL('image/jpeg', 0.92);
-  const pageW = pdf.internal.pageSize.getWidth();
-  const pageH = pdf.internal.pageSize.getHeight();
-  // compute fit
-  const img = new Image(); await new Promise(r=>{ img.onload=r; img.src=imgData; });
-  let w = pageW - 40; // margins
-  let h = img.height * (w / img.width);
-  if(h > pageH - 40){
-    h = pageH - 40;
-    w = img.width * (h / img.height);
-  }
-  const x = (pageW - w)/2;
-  const y = (pageH - h)/2;
-  pdf.addImage(imgData, 'JPEG', x, y, w, h);
-  pdf.save('DocSign-SWC.pdf');
-}
-
-async function shareWhatsApp(){
-  if(!haveImage){ alert('Capture or upload first'); return }
-  // Build a PDF blob first
-  const { jsPDF } = window.jspdf;
-  const pdf = new jsPDF({ orientation:'portrait', unit:'pt', format:'a4' });
-  const tmp = document.createElement('canvas');
-  tmp.width = workCanvas.width; tmp.height = workCanvas.height;
-  const tctx = tmp.getContext('2d');
-  tctx.drawImage(workCanvas,0,0);
-  tctx.drawImage(sigCanvas,0,0);
-  const imgData = tmp.toDataURL('image/jpeg', 0.9);
-  const pageW = pdf.internal.pageSize.getWidth();
-  const pageH = pdf.internal.pageSize.getHeight();
-  const img = new Image(); await new Promise(r=>{ img.onload=r; img.src=imgData; });
-  let w = pageW - 40;
-  let h = img.height * (w / img.width);
-  if(h > pageH - 40){
-    h = pageH - 40; w = img.width * (h / img.height);
-  }
-  const x = (pageW - w)/2, y=(pageH - h)/2;
-  pdf.addImage(imgData, 'JPEG', x, y, w, h);
-  const pdfBlob = pdf.output('blob');
-  const file = new File([pdfBlob], 'DocSign-SWC.pdf', { type: 'application/pdf' });
-
-  if(navigator.share && navigator.canShare && navigator.canShare({ files: [file] })){
-    try{
-      await navigator.share({
-        title: 'DocSign SWC',
-        text: 'Signed document',
-        files: [file]
-      });
-    }catch(e){
-      // user cancelled
-    }
-  }else{
-    // Fallback to wa.me link
-    const url = URL.createObjectURL(pdfBlob);
-    const msg = encodeURIComponent('Signed document created with DocSign SWC. Download link below then share manually in WhatsApp: ' + url);
-    window.open('https://wa.me/?text=' + msg, '_blank');
-  }
-}
-
-function handleUpload(file){
-  const img = new Image();
-  img.onload = ()=>{
-    const ctx = captureCanvas.getContext('2d');
-    // draw to fit canvas
-    ctx.clearRect(0,0,captureCanvas.width,captureCanvas.height);
-    const ratio = Math.min(captureCanvas.width/img.width, captureCanvas.height/img.height);
-    const w = img.width * ratio, h = img.height * ratio;
-    const x = (captureCanvas.width - w)/2, y=(captureCanvas.height - h)/2;
-    ctx.drawImage(img, x, y, w, h);
-    runAutoFix();
-    hint.style.display = 'none';
-  };
-  img.src = URL.createObjectURL(file);
-}
-
-function waitForOpenCV(){
-  return new Promise(resolve=>{
-    if(window.cv && cv.getBuildInformation){ resolve(); return }
-    const check = setInterval(()=>{
-      if(window.cv && cv.getBuildInformation){ clearInterval(check); resolve() }
-    }, 80);
-  });
-}
-
-window.addEventListener('load', async()=>{
-  setCanvasSizesFromStage();
-  await waitForOpenCV();
-  setupSignature();
-  setupZoomPan();
-
-  btnStartCamera.addEventListener('click', startCamera);
-  btnCapture.addEventListener('click', handleCapture);
-  btnRetake.addEventListener('click', handleRetake);
-  btnAutoFix.addEventListener('click', runAutoFix);
-  btnBW.addEventListener('click', applyBW);
-  btnColor.addEventListener('click', restoreColour);
-  btnDownload.addEventListener('click', downloadPDF);
-  btnShare.addEventListener('click', shareWhatsApp);
-  penBlack.addEventListener('click', ()=>{ penColour='black'; penColourFromButton() });
-  penBlue.addEventListener('click', ()=>{ penColour='blue'; penColourFromButton() });
-  btnClearSig.addEventListener('click', clearSignature);
-  fileInput.addEventListener('change', e=>{
-    const f = e.target.files[0];
-    if(f){ handleUpload(f) }
-  });
-  penColourFromButton();
+window.addEventListener("resize", () => {
+  fitCanvasToWrap();
+  if (originalImageBitmap) render();
 });
 
-window.addEventListener('resize', onResize);
+fitCanvasToWrap();
+
+fileInput.addEventListener("change", async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+  const bitmap = await createImageBitmap(file, { resizeQuality: "high" });
+  originalImageBitmap = bitmap;
+  ph.style.display = "none";
+  render();
+});
+
+// Render pipeline with contrast and brightness then mode
+function render() {
+  if (!originalImageBitmap) return;
+  // draw base image scaled to canvas
+  const cw = docCanvas.width,
+    ch = docCanvas.height;
+  dctx.clearRect(0, 0, cw, ch);
+  // cover fit
+  const br = originalImageBitmap.width / originalImageBitmap.height;
+  const cr = cw / ch;
+  let dw = cw,
+    dh = ch,
+    dx = 0,
+    dy = 0;
+  if (br > cr) {
+    // image wider than canvas
+    dh = ch;
+    dw = dh * br;
+    dx = (cw - dw) / 2;
+  } else {
+    dw = cw;
+    dh = dw / br;
+    dy = (ch - dh) / 2;
+  }
+  dctx.drawImage(originalImageBitmap, dx, dy, dw, dh);
+
+  // get pixels
+  const imgData = dctx.getImageData(0, 0, cw, ch);
+  const data = imgData.data;
+  // apply brightness and contrast
+  const b = parseInt(bright.value, 10);
+  const c = parseInt(contr.value, 10);
+  // contrast formula using factor
+  const cf = (259 * (c + 255)) / (255 * (259 - c));
+  for (let i = 0; i < data.length; i += 4) {
+    let r = data[i],
+      g = data[i + 1],
+      bl = data[i + 2];
+    r = cf * (r - 128) + 128 + b;
+    g = cf * (g - 128) + 128 + b;
+    bl = cf * (bl - 128) + 128 + b;
+    data[i] = Math.max(0, Math.min(255, r));
+    data[i + 1] = Math.max(0, Math.min(255, g));
+    data[i + 2] = Math.max(0, Math.min(255, bl));
+  }
+  const mode = document.querySelector('input[name="mode"]:checked').value;
+  if (mode === "greyscale" || mode === "threshold") {
+    // convert to greyscale
+    for (let i = 0; i < data.length; i += 4) {
+      const y = 0.299 * data[i] + 0.587 * data[i + 1] + 0.114 * data[i + 2];
+      data[i] = data[i + 1] = data[i + 2] = y;
+    }
+    if (mode === "threshold") {
+      const t = parseInt(thresholdSlider.value, 10);
+      for (let i = 0; i < data.length; i += 4) {
+        const v = data[i] < t ? 0 : 255;
+        data[i] = data[i + 1] = data[i + 2] = v;
+      }
+    }
+  }
+  dctx.putImageData(imgData, 0, 0);
+}
+
+// controls
+modeRadios.forEach((r) => r.addEventListener("change", render));
+[thresholdSlider, bright, contr].forEach((el) =>
+  el.addEventListener("input", render)
+);
+
+inkBtns.forEach((btn) => {
+  btn.addEventListener("click", () => {
+    inkBtns.forEach((b) => b.classList.remove("sel"));
+    btn.classList.add("sel");
+    currentInk = btn.dataset.ink;
+  });
+});
+
+clearBtn.addEventListener("click", () => {
+  sctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);
+});
+
+// signature drawing with simple velocity smoothing and subtle texture
+let drawing = false;
+let last = null;
+
+function getInkStyle() {
+  // realistic pen ink with slight alpha and glow
+  const color =
+    currentInk === "blue" ? "rgba(20,80,200,1)" : "rgba(20,20,20,1)";
+  return color;
+}
+
+function lineWidthFromVelocity(v) {
+  const base = parseInt(penSize.value, 10);
+  const min = Math.max(1, base * 0.6);
+  const max = base * 1.8;
+  const speed = Math.min(1.5, v);
+  const w = max - speed * (max - min);
+  return w;
+}
+
+function pointerPos(e) {
+  const rect = sigCanvas.getBoundingClientRect();
+  const x = (e.clientX || e.touches?.[0]?.clientX) - rect.left;
+  const y = (e.clientY || e.touches?.[0]?.clientY) - rect.top;
+  return { x, y };
+}
+
+function startDraw(e) {
+  e.preventDefault();
+  if (!originalImageBitmap) {
+    return;
+  }
+  drawing = true;
+  last = { ...pointerPos(e), t: performance.now() };
+}
+
+function draw(e) {
+  if (!drawing) return;
+  const p = pointerPos(e);
+  const t = performance.now();
+  const dt = Math.max(1, t - last.t);
+  const dx = p.x - last.x,
+    dy = p.y - last.y;
+  const dist = Math.hypot(dx, dy);
+  const v = (dist / dt) * 10;
+
+  const w = lineWidthFromVelocity(v);
+
+  sctx.lineCap = "round";
+  sctx.lineJoin = "round";
+  sctx.strokeStyle = getInkStyle();
+  sctx.lineWidth = w;
+
+  sctx.beginPath();
+  sctx.moveTo(last.x, last.y);
+  sctx.lineTo(p.x, p.y);
+  sctx.stroke();
+
+  // subtle feather to mimic ink bleed
+  sctx.globalAlpha = 0.08;
+  sctx.lineWidth = w * 1.6;
+  sctx.stroke();
+  sctx.globalAlpha = 1;
+
+  last = { x: p.x, y: p.y, t: t };
+}
+
+function endDraw() {
+  drawing = false;
+  last = null;
+}
+
+["pointerdown", "touchstart"].forEach((ev) =>
+  sigCanvas.addEventListener(ev, startDraw, { passive: false })
+);
+["pointermove", "touchmove"].forEach((ev) =>
+  sigCanvas.addEventListener(ev, draw, { passive: false })
+);
+["pointerup", "pointerleave", "touchend", "touchcancel"].forEach((ev) =>
+  sigCanvas.addEventListener(ev, endDraw)
+);
+
+// export helpers
+async function compositeToBlob() {
+  const off = document.createElement("canvas");
+  off.width = docCanvas.width;
+  off.height = docCanvas.height;
+  const octx = off.getContext("2d");
+  octx.drawImage(docCanvas, 0, 0);
+  octx.drawImage(sigCanvas, 0, 0);
+  return await new Promise((res) => off.toBlob(res, "image/png", 0.95));
+}
+
+downloadBtn.addEventListener("click", async () => {
+  if (!originalImageBitmap) {
+    alert("Please upload a document first");
+    return;
+  }
+  const blob = await compositeToBlob();
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = "DocSign_by_SWC.png";
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+shareBtn.addEventListener("click", async () => {
+  if (!originalImageBitmap) {
+    alert("Please upload a document first");
+    return;
+  }
+  try {
+    const blob = await compositeToBlob();
+    const file = new File([blob], "DocSign_by_SWC.png", { type: "image/png" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({
+        files: [file],
+        title: "Signed document",
+        text: "Signed with DocSign by SWC",
+      });
+    } else {
+      // fallback to WhatsApp text share with link to image data
+      const url = URL.createObjectURL(blob);
+      const text = encodeURIComponent("Signed with DocSign by SWC");
+      // WhatsApp cannot accept blob URLs as media directly from browser reliably
+      // So we open a share text only and instruct the user to attach image from downloads if needed
+      window.open("https://api.whatsapp.com/send?text=" + text, "_blank");
+      setTimeout(() => URL.revokeObjectURL(url), 10000);
+      alert(
+        "Your browser cannot share the image directly. The image is downloaded. Attach it in WhatsApp."
+      );
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = "DocSign_by_SWC.png";
+      a.click();
+    }
+  } catch (err) {
+    alert("Share failed. " + err.message);
+  }
+});
+
+// initial state
+sctx.clearRect(0, 0, sigCanvas.width, sigCanvas.height);

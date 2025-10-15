@@ -1,75 +1,86 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
+
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"/>
-  <title>DocSign SWC</title>
-  <link rel="stylesheet" href="styles.css"/>
-  <!-- External libs -->
-  <script defer src="https://cdn.jsdelivr.net/npm/jspdf@2.5.1/dist/jspdf.umd.min.js"></script>
-  <script defer src="https://docs.opencv.org/4.x/opencv.js"></script>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DocSign by SWC</title>
+  <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
-  <div class="app">
-    <header class="topbar">
-      <h1><span class="brand">DocSign</span> <span class="by">SWC</span></h1>
-      <div class="actions">
-        <button id="btnStartCamera" class="btn primary">Start camera</button>
-        <label class="filelabel">
-          <input type="file" id="fileInput" accept="image/*" />
-          <span class="btn">Upload image</span>
-        </label>
+  <header class="topbar">
+    <h1>DocSign <span class="by">by SWC</span></h1>
+    <div class="actions">
+      <label class="file-btn">
+        <input id="fileInput" type="file" accept="image/*" hidden>
+        <span>Upload document</span>
+      </label>
+      <button id="clearSig" class="ghost">Clear signature</button>
+      <button id="downloadBtn">Download</button>
+      <button id="shareBtn" class="primary">Share on WhatsApp</button>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <aside class="controls">
+      <div class="card">
+        <h3>Image tools</h3>
+        <div class="control">
+          <label><input type="radio" name="mode" value="original" checked> Original</label>
+          <label><input type="radio" name="mode" value="greyscale"> Black and white simple</label>
+          <label><input type="radio" name="mode" value="threshold"> Black and white clean</label>
+        </div>
+        <div class="control">
+          <label>Clean level</label>
+          <input id="thresholdSlider" type="range" min="0" max="255" value="180">
+          <small>Use when Clean mode is selected</small>
+        </div>
+        <div class="control">
+          <label>Brightness</label>
+          <input id="brightness" type="range" min="-100" max="100" value="0">
+        </div>
+        <div class="control">
+          <label>Contrast</label>
+          <input id="contrast" type="range" min="-100" max="100" value="0">
+        </div>
       </div>
-    </header>
 
-    <main class="content">
-      <section class="stage">
-        <video id="video" playsinline autoplay muted></video>
-        <canvas id="captureCanvas"></canvas>
-        <canvas id="workCanvas"></canvas>
-        <canvas id="signatureCanvas"></canvas>
-
-        <div id="hint" class="hint">
-          Align a document in the frame then tap Capture
-        </div>
-      </section>
-
-      <section class="controls">
+      <div class="card">
+        <h3>Signature tools</h3>
         <div class="row">
-          <button id="btnCapture" class="btn success">Capture</button>
-          <button id="btnRetake" class="btn">Retake</button>
-          <button id="btnAutoFix" class="btn">Auto straighten</button>
-          <button id="btnBW" class="btn">Black and white</button>
-          <button id="btnColor" class="btn">Original colour</button>
+          <button data-ink="black" class="ink sel">Black pen</button>
+          <button data-ink="blue" class="ink">Blue pen</button>
         </div>
-
-        <div class="row">
-          <div class="signature-tools">
-            <span>Signature</span>
-            <button id="penBlack" class="btn tiny active">Black pen</button>
-            <button id="penBlue" class="btn tiny">Blue pen</button>
-            <button id="btnClearSig" class="btn tiny">Clear</button>
-          </div>
-          <div class="zoom-tools">
-            <span>Zoom</span>
-            <button id="zoomIn" class="btn tiny">+</button>
-            <button id="zoomOut" class="btn tiny">−</button>
-            <button id="zoomReset" class="btn tiny">Reset</button>
-          </div>
+        <div class="control">
+          <label>Pen size</label>
+          <input id="penSize" type="range" min="1" max="12" value="3">
         </div>
+        <p class="hint">Draw your signature in the canvas. Tip for realism: sign in one fluid motion.</p>
+      </div>
 
-        <div class="row end">
-          <button id="btnDownload" class="btn primary">Download PDF</button>
-          <button id="btnShare" class="btn whatsapp">Share in WhatsApp</button>
+      <div class="card">
+        <h3>Export</h3>
+        <p>Download a PNG or share the signed doc to WhatsApp if your browser supports sharing files.</p>
+      </div>
+    </aside>
+
+    <section class="stage">
+      <div class="canvas-wrap">
+        <canvas id="docCanvas"></canvas>
+        <canvas id="sigCanvas"></canvas>
+        <div id="placeholder">
+          <p>Upload a document image to begin</p>
         </div>
-      </section>
-    </main>
+      </div>
+    </section>
+  </main>
 
-    <footer class="footer">
-      <p>All on your device. No upload to servers.</p>
-    </footer>
-  </div>
+  <footer class="footer">
+    <p>Privacy note: Everything runs locally in your browser.</p>
+  </footer>
 
   <script src="app.js"></script>
 </body>
+
 </html>
